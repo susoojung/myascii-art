@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Korean ASCII Camera</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000; color: #fff; font-family: monospace;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; min-height: 100vh;
+  }
+
+  #intro {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 20px; padding: 2rem;
+  }
+  #intro h1 { font-size: 24px; letter-spacing: 4px; color: #fff; }
+  #intro p { font-size: 13px; color: #888; text-align: center; line-height: 1.8; }
+  #nameInput {
+    background: transparent; border: 1px solid #444; border-radius: 8px;
+    padding: 10px 20px; font-size: 20px; color: #fff; text-align: center;
+    width: 220px; outline: none; font-family: monospace;
+  }
+  #nameInput:focus { border-color: #fff; }
+  #startBtn {
+    background: #fff; color: #000; border: none; border-radius: 8px;
+    padding: 10px 32px; font-size: 15px; cursor: pointer; font-family: monospace;
+    font-weight: bold; letter-spacing: 1px;
+  }
+  #startBtn:hover { background: #ddd; }
+
+  #app { display: none; flex-direction: column; align-items: center; width: 100%; background: #000; }
+
+  #info {
+    width: 100%; max-width: 660px;
+    padding: 8px 14px; font-size: 12px; color: #555;
+    display: flex; gap: 16px; align-items: center;
+  }
+  #charInfo { color: #888; font-size: 13px; flex: 1; }
+
+  /* 1:1 정방형 컨테이너 */
+  #asciiWrap {
+    width: 100%;
+    max-width: 660px;
+    aspect-ratio: 1 / 1;
+    overflow: hidden;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #asciiOutput {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 11px;
+    line-height: 11px;
+    letter-spacing: 2px;
+    white-space: pre;
+    color: #fff;
+    display: block;
+    background: #000;
+  }
+
+  #resetBtn {
+    background: transparent; border: 1px solid #333; color: #666;
+    border-radius: 4px; padding: 4px 12px; font-size: 11px; cursor: pointer;
+    font-family: monospace;
+  }
+  #resetBtn:hover { color: #fff; border-color: #888; }
+
+  video, canvas { display: none; }
+</style>
+</head>
+<body>
+
+<div id="intro">
+  <h1>ASCII CAMERA</h1>
+  <p>이름을 입력하면 이름의 자음과 모음으로<br>실시간 ASCII 아트를 만들어드려요</p>
+  <input type="text" id="nameInput" placeholder="이름 입력 (예: 수정)" maxlength="6" />
+  <button id="startBtn">시작하기</button>
+  <p style="font-size: 11px; color: #444;">카메라 권한이 필요합니다</p>
+</div>
+
+<div id="app">
+  <div id="info">
+    <span id="charInfo"></span>
+    <button id="resetBtn">다시 입력</button>
+  </div>
+  <div id="asciiWrap">
+    <pre id="asciiOutput"></pre>
+  </div>
+</div>
+
+<video id="video" autoplay playsinline></video>
+<canvas id="canvas"></canvas>
+
+<script>
+const JAMO_ONSET = ['ㄱ','ㄲ','ㄴ','ㄷ','ㄸ','ㄹ','ㅁ','ㅂ','ㅃ','ㅅ','ㅆ','ㅇ','ㅈ','ㅉ','ㅊ','ㅋ','ㅌ','ㅍ','ㅎ'];
+const JAMO_VOWEL = ['ㅏ','ㅐ','ㅑ','ㅒ','ㅓ','ㅔ','ㅕ','ㅖ','ㅗ','ㅘ','ㅙ','ㅚ','ㅛ','ㅜ','ㅝ','ㅞ','ㅟ','ㅠ','ㅡ','ㅢ','ㅣ'];
+const JAMO_CODA  = ['','ㄱ','ㄲ','ㄳ','ㄴ','ㄵ','ㄶ','ㄷ','ㄹ','ㄺ','ㄻ','ㄼ','ㄽ','ㄾ','ㄿ','ㅀ','ㅁ','ㅂ','ㅄ','ㅅ','ㅆ','ㅇ','ㅈ','ㅊ','ㅋ','ㅌ','ㅍ','ㅎ'];
+
+function decomposeKorean(str) {
+  const result = [];
+  for (const ch of str) {
+    const code = ch.charCodeAt(0);
+    if (code >= 0xAC00 && code <= 0xD7A3) {
+      const offset = code - 0xAC00;
+      const onset  = Math.floor(offset / (21 * 28));
+      const vowel  = Math.floor((offset % (21 * 28)) / 28);
+      const coda   = offset % 28;
+      result.push(JAMO_ONSET[onset]);
+      result.push(JAMO_VOWEL[vowel]);
+      if (coda > 0) result.push(JAMO_CODA[coda]);
+    } else if (code >= 0x3131 && code <= 0x318E) {
+      result.push(ch);
+    }
+  }
+  return [...new Set(result)].filter(Boolean);
+}
+
+// 대비 강화: S-커브 방식
+function applyContrast(value, factor) {
+  let v = (value / 255 - 0.5) * factor + 0.5;
+  return Math.max(0, Math.min(1, v)) * 255;
+}
+
+const video     = document.getElementById('video');
+const canvas    = document.getElementById('canvas');
+const ctx       = canvas.getContext('2d');
+const asciiOut  = document.getElementById('asciiOutput');
+const nameInput = document.getElementById('nameInput');
+const startBtn  = document.getElementById('startBtn');
+const intro     = document.getElementById('intro');
+const app       = document.getElementById('app');
+const charInfo  = document.getElementById('charInfo');
+const resetBtn  = document.getElementById('resetBtn');
+
+let chars = [];
+let animFrame = null;
+let stream = null;
+
+// 1:1 정방형 → COLS == ROWS
+// 글자 11px + letter-spacing 2px = 약 13px 폭, 11px 높이
+// 660px 컨테이너 기준: 가로 ~50자, 세로 ~60줄 → 정방형에 맞게 50 x 50
+const COLS     = 50;
+const ROWS     = 50;
+const CONTRAST = 2.8;
+
+function brightnessToChar(b) {
+  if (chars.length === 0) return ' ';
+  if (b < 18) return ' ';
+  const idx = Math.floor((b / 255) * (chars.length - 1));
+  return chars[Math.min(idx, chars.length - 1)];
+}
+
+function renderFrame() {
+  canvas.width  = COLS;
+  canvas.height = ROWS;
+
+  // 카메라 영상을 가운데 정방형으로 크롭
+  const vw   = video.videoWidth;
+  const vh   = video.videoHeight;
+  const size = Math.min(vw, vh);
+  const sx   = (vw - size) / 2;
+  const sy   = (vh - size) / 2;
+
+  ctx.save();
+  ctx.translate(COLS, 0);
+  ctx.scale(-1, 1); // 좌우 반전 (거울 효과)
+  ctx.drawImage(video, sx, sy, size, size, 0, 0, COLS, ROWS);
+  ctx.restore();
+
+  const data = ctx.getImageData(0, 0, COLS, ROWS).data;
+
+  let out = '';
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      const i = (y * COLS + x) * 4;
+      const r = data[i], g = data[i+1], b = data[i+2];
+      let brightness = 0.299 * r + 0.587 * g + 0.114 * b;
+      brightness = applyContrast(brightness, CONTRAST);
+      out += brightnessToChar(brightness);
+    }
+    out += '\n';
+  }
+  asciiOut.textContent = out;
+  animFrame = requestAnimationFrame(renderFrame);
+}
+
+async function startCamera(name) {
+  chars = decomposeKorean(name);
+  if (chars.length < 2) {
+    alert('한글 이름을 입력해주세요 (예: 수정, 지민)');
+    return;
+  }
+  const consonants = chars.filter(c => !JAMO_VOWEL.includes(c));
+  const vowels     = chars.filter(c =>  JAMO_VOWEL.includes(c));
+  chars = [...consonants, ...vowels];
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: 'user' }
+    });
+    video.srcObject = stream;
+    await new Promise(r => video.onloadedmetadata = r);
+    video.play();
+    charInfo.textContent = `"${name}" → ${chars.join('  ')}`;
+    intro.style.display = 'none';
+    app.style.display   = 'flex';
+    renderFrame();
+  } catch(e) {
+    alert('카메라 권한을 허용해주세요!\n브라우저 주소창 옆 카메라 아이콘을 확인해보세요.');
+  }
+}
+
+function stopAll() {
+  if (animFrame) cancelAnimationFrame(animFrame);
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  animFrame = null; stream = null;
+  app.style.display   = 'none';
+  intro.style.display = 'flex';
+  nameInput.value = '';
+}
+
+startBtn.addEventListener('click', () => {
+  const name = nameInput.value.trim();
+  if (!name) return;
+  startCamera(name);
+});
+nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') startBtn.click(); });
+resetBtn.addEventListener('click', stopAll);
+</script>
+</body>
+</html>
